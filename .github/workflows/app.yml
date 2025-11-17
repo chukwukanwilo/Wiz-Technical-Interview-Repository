@@ -11,6 +11,8 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
     steps:
     - uses: actions/checkout@v4
     - name: Configure AWS credentials (OIDC)
@@ -25,26 +27,31 @@ jobs:
       with:
         region: us-east-1
     - name: Ensure ECR repository
-      env:
-        ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-        ECR_REPO: ${{ secrets.ECR_REPO }}
       run: |
         set -e
-        if [[ -z "${ECR_REGISTRY}" || -z "${ECR_REPO}" ]]; then
-          echo "ECR_REGISTRY and ECR_REPO secrets must be set" >&2
-          exit 1
+        # Determine ECR repo name: prefer secret, fall back to default
+        if [ -z "${{ secrets.ECR_REPO }}" ]; then
+          echo "ECR_REPO will default to 'wiz-tasky'"
+          echo "ECR_REPO=wiz-tasky" >> $GITHUB_ENV
+        else
+          echo "ECR_REPO=${{ secrets.ECR_REPO }}" >> $GITHUB_ENV
         fi
+
+        # Determine account ID and registry
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        echo "ECR_REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> $GITHUB_ENV
+
         # Create repo if missing
         aws ecr describe-repositories --repository-names "${ECR_REPO}" || aws ecr create-repository --repository-name "${ECR_REPO}"
     - name: Build image
       run: |
-        docker build -t ${{ secrets.ECR_REPO }}:latest ./app
-        docker tag ${{ secrets.ECR_REPO }}:latest ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO }}:latest
+        docker build -t ${ECR_REPO}:latest ./app
+        docker tag ${ECR_REPO}:latest ${ECR_REGISTRY}/${ECR_REPO}:latest
     - name: Scan image
       run: trivy image --severity HIGH,CRITICAL ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO }}:latest || true
     - name: Push image
-      run: docker push ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO }}:latest
+      run: docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
     - name: Trigger K8s rollout
       run: |
         # uses kubectl with KUBECONFIG from secrets or from Terraform outputs
-        kubectl set image deployment/tasky-app tasky=${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO }}:latest
+        kubectl set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest
