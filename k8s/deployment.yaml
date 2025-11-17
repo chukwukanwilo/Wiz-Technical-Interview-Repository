@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tasky-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tasky
+  template:
+    metadata:
+      labels:
+        app: tasky
+    spec:
+      containers:
+      - name: tasky
+        image: <REGISTRY>/tasky:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: MONGO_URI
+          value: "mongodb://<EC2_PRIVATE_IP>:27017/tasky"
+        volumeMounts: []
