@@ -31,24 +31,28 @@ jobs:
         set -e
         # Determine ECR repo name: prefer secret, fall back to default
         if [ -z "${{ secrets.ECR_REPO }}" ]; then
+          REPO_NAME="wiz-tasky"
           echo "ECR_REPO will default to 'wiz-tasky'"
-          echo "ECR_REPO=wiz-tasky" >> $GITHUB_ENV
         else
-          echo "ECR_REPO=${{ secrets.ECR_REPO }}" >> $GITHUB_ENV
+          REPO_NAME="${{ secrets.ECR_REPO }}"
         fi
 
-        # Determine account ID and registry
-        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        echo "ECR_REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> $GITHUB_ENV
+        # Export for subsequent steps
+        echo "ECR_REPO=${REPO_NAME}" >> $GITHUB_ENV
 
-        # Create repo if missing
-        aws ecr describe-repositories --repository-names "${ECR_REPO}" || aws ecr create-repository --repository-name "${ECR_REPO}"
+        # Determine account ID and registry and export
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        echo "ECR_REGISTRY=${REGISTRY}" >> $GITHUB_ENV
+
+        # Create repo if missing (use local variable)
+        aws ecr describe-repositories --repository-names "${REPO_NAME}" || aws ecr create-repository --repository-name "${REPO_NAME}"
     - name: Build image
       run: |
         docker build -t ${ECR_REPO}:latest ./app
         docker tag ${ECR_REPO}:latest ${ECR_REGISTRY}/${ECR_REPO}:latest
     - name: Scan image
-      run: trivy image --severity HIGH,CRITICAL ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO }}:latest || true
+      run: trivy image --severity HIGH,CRITICAL ${ECR_REGISTRY}/${ECR_REPO}:latest || true
     - name: Push image
       run: docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
     - name: Trigger K8s rollout
