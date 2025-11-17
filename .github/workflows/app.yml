@@ -55,6 +55,14 @@ jobs:
       run: trivy image --severity HIGH,CRITICAL ${ECR_REGISTRY}/${ECR_REPO}:latest || true
     - name: Push image
       run: docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
+    - name: Configure kubectl for EKS (optional)
+      run: |
+        # If you set the EKS_CLUSTER_NAME secret, this will configure kubeconfig for kubectl
+        if [ -z "${{ secrets.EKS_CLUSTER_NAME }}" ]; then
+          echo "EKS_CLUSTER_NAME secret not set; skipping aws eks update-kubeconfig"
+          exit 0
+        fi
+        aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
     - name: Trigger K8s rollout
       run: |
         # uses kubectl with KUBECONFIG from secrets or from Terraform outputs
