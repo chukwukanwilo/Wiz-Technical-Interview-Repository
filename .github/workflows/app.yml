@@ -18,6 +18,8 @@ jobs:
       uses: docker/setup-buildx-action@v2
     - name: Login to ECR
       uses: aws-actions/amazon-ecr-login@v2
+      with:
+        region: us-east-1
     - name: Ensure ECR repository
       env:
         ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
