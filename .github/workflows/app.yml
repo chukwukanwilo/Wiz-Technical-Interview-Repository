@@ -65,5 +65,10 @@ jobs:
         aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
     - name: Trigger K8s rollout
       run: |
-        # uses kubectl with KUBECONFIG from secrets or from Terraform outputs
-        kubectl set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest
+        # Only run kubectl if kubeconfig exists (either from aws eks update-kubeconfig or provided secret)
+        if [ -f "$HOME/.kube/config" ]; then
+          echo "Kubeconfig found, updating deployment image"
+          kubectl set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest
+        else
+          echo "Kubeconfig not found; skipping kubectl set image to avoid connection errors"
+        fi
