@@ -14,14 +14,17 @@ jobs:
         install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
         kubectl version --client
     - name: Setup Kubeconfig from secret
-      if: ${{ secrets.KUBECONFIG != '' }}
       run: |
+        if [ -z "${{ secrets.KUBECONFIG }}" ]; then
+          echo "KUBECONFIG secret is missing; please add a base64-encoded kubeconfig to the repository secret KUBECONFIG" >&2
+          exit 1
+        fi
         echo "Writing kubeconfig"
         echo "${{ secrets.KUBECONFIG }}" | base64 --decode > $HOME/.kube/config
         chmod 600 $HOME/.kube/config
     - name: Run smoke tests
       env:
-        KUBECONFIG: ${{ matrix.kubeconfig_path }}
+        KUBECONFIG: $HOME/.kube/config
       run: |
         chmod +x ./scripts/smoke_test.sh
         ./scripts/smoke_test.sh
