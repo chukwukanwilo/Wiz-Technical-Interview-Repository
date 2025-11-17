@@ -1,0 +1,13 @@
+# terraform.tfvars.example
+# Copy this to terraform/terraform.tfvars and set values before running terraform
+
+aws_region = "us-east-1"
+project = "wiz-exercise"
+# key_name is required for the EC2 instance (mongo VM). Create a keypair in AWS and set the name here.
+key_name = "your-key-name"
+
+# Optional: provide a deterministic S3 bucket name. Leave null to have Terraform generate one.
+backup_bucket_name = null
+
+# Optional: desired node count for EKS
+eks_node_group_desired = 2

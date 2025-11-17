@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tasky-ingress
+  annotations:
+    kubernetes.io/ingress.class: alb # or nginx depending on your cluster
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tasky-svc
+            port:
+              number: 80
