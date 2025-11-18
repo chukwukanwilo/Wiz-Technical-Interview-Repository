@@ -1,8 +1,10 @@
 name: App CI/CD
+
 on:
   push:
     paths:
       - 'app/**'
+  workflow_dispatch: {}
 
 permissions:
   id-token: write
@@ -13,62 +15,105 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: us-east-1
+      EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+      CREATE_EKS: ${{ secrets.CREATE_EKS }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Configure AWS credentials (OIDC)
-      uses: aws-actions/configure-aws-credentials@v3
-      with:
-        role-to-assume: arn:aws:iam::253490792199:role/github-oidc-deploy-role
-        aws-region: us-east-1
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    - name: Login to ECR
-      uses: aws-actions/amazon-ecr-login@v2
-      with:
-        region: us-east-1
-    - name: Ensure ECR repository
-      run: |
-        set -e
-        # Determine ECR repo name: prefer secret, fall back to default
-        if [ -z "${{ secrets.ECR_REPO }}" ]; then
-          REPO_NAME="wiz-tasky"
-          echo "ECR_REPO will default to 'wiz-tasky'"
-        else
-          REPO_NAME="${{ secrets.ECR_REPO }}"
-        fi
+      - uses: actions/checkout@v4
 
-        # Export for subsequent steps
-        echo "ECR_REPO=${REPO_NAME}" >> $GITHUB_ENV
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::253490792199:role/github-oidc-deploy-role
+          aws-region: us-east-1
 
-        # Determine account ID and registry and export
-        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        echo "ECR_REGISTRY=${REGISTRY}" >> $GITHUB_ENV
+      - name: Install tooling (eksctl, kubectl)
+        run: |
+          set -e
+          echo "Installing eksctl"
+          curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+          sudo mv /tmp/eksctl /usr/local/bin
+          eksctl version || true
 
-        # Create repo if missing (use local variable)
-        aws ecr describe-repositories --repository-names "${REPO_NAME}" || aws ecr create-repository --repository-name "${REPO_NAME}"
-    - name: Build image
-      run: |
-        docker build -t ${ECR_REPO}:latest ./app
-        docker tag ${ECR_REPO}:latest ${ECR_REGISTRY}/${ECR_REPO}:latest
-    - name: Scan image
-      run: trivy image --severity HIGH,CRITICAL ${ECR_REGISTRY}/${ECR_REPO}:latest || true
-    - name: Push image
-      run: docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
-    - name: Configure kubectl for EKS (optional)
-      run: |
-        # If you set the EKS_CLUSTER_NAME secret, this will configure kubeconfig for kubectl
-        if [ -z "${{ secrets.EKS_CLUSTER_NAME }}" ]; then
-          echo "EKS_CLUSTER_NAME secret not set; skipping aws eks update-kubeconfig"
-          exit 0
-        fi
-        aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
-    - name: Trigger K8s rollout
-      run: |
-        # Only run kubectl if kubeconfig exists (either from aws eks update-kubeconfig or provided secret)
-        if [ -f "$HOME/.kube/config" ]; then
-          echo "Kubeconfig found, updating deployment image"
-          kubectl set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest
-        else
-          echo "Kubeconfig not found; skipping kubectl set image to avoid connection errors"
-        fi
+          echo "Installing kubectl"
+          KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+          curl -L "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o kubectl
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          kubectl version --client --short || true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          region: us-east-1
+
+      - name: Ensure ECR repository
+        run: |
+          set -e
+          if [ -z "${{ secrets.ECR_REPO }}" ]; then
+            REPO_NAME="wiz-tasky"
+            echo "ECR_REPO will default to 'wiz-tasky'"
+          else
+            REPO_NAME="${{ secrets.ECR_REPO }}"
+          fi
+          echo "ECR_REPO=${REPO_NAME}" >> $GITHUB_ENV
+
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "ECR_REGISTRY=${REGISTRY}" >> $GITHUB_ENV
+
+          aws ecr describe-repositories --repository-names "${REPO_NAME}" || aws ecr create-repository --repository-name "${REPO_NAME}"
+
+      - name: Build image
+        run: |
+          docker build -t ${ECR_REPO}:latest ./app
+          docker tag ${ECR_REPO}:latest ${ECR_REGISTRY}/${ECR_REPO}:latest
+
+      - name: Scan image
+        run: trivy image --severity HIGH,CRITICAL ${ECR_REGISTRY}/${ECR_REPO}:latest || true
+
+      - name: Push image
+        run: docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
+
+      - name: Create EKS cluster if requested
+        run: |
+          set -e
+          echo "CREATE_EKS set? -> ${CREATE_EKS:+yes}"
+          if [ -z "${EKS_CLUSTER_NAME:-}" ]; then
+            echo "EKS_CLUSTER_NAME not set; skipping cluster creation"
+            exit 0
+          fi
+          if [ "${CREATE_EKS:-}" != "true" ]; then
+            echo "CREATE_EKS != 'true'; skipping cluster creation"
+            exit 0
+          fi
+
+          echo "Checking for existing cluster named '${EKS_CLUSTER_NAME}' in ${AWS_REGION}"
+          if aws eks list-clusters --region "${AWS_REGION}" --query "clusters" --output text | tr '\t' '\n' | grep -x "${EKS_CLUSTER_NAME}" >/dev/null 2>&1; then
+            echo "Cluster ${EKS_CLUSTER_NAME} already exists; skipping creation"
+          else
+            echo "Cluster ${EKS_CLUSTER_NAME} not found; creating with eksctl (this can take ~10-20 minutes)"
+            # Adjust node count and node-type as needed. Managed nodes by default.
+            eksctl create cluster --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --nodes 2 --managed --wait
+          fi
+
+      - name: Configure kubectl for EKS
+        run: |
+          set -e
+          echo "EKS_CLUSTER_NAME set? -> ${EKS_CLUSTER_NAME:+yes}"
+          if [ -z "${EKS_CLUSTER_NAME:-}" ]; then
+            echo "EKS_CLUSTER_NAME secret not set; skipping aws eks update-kubeconfig"
+            exit 0
+          fi
+          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+
+      - name: Trigger K8s rollout
+        run: |
+          if [ -f "$HOME/.kube/config" ]; then
+            echo "Kubeconfig found, updating deployment image"
+            kubectl set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest || true
+          else
+            echo "Kubeconfig not found; skipping kubectl set image to avoid connection errors"
+          fi
