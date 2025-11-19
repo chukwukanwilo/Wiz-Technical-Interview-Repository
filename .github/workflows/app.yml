@@ -124,7 +124,18 @@ jobs:
             if kubectl -n "${NAMESPACE}" get deployment tasky-app >/dev/null 2>&1; then
               echo "Deployment found; setting image and waiting for rollout"
               kubectl -n "${NAMESPACE}" set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest --record
-              kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=5m
+              ROLL_TIMEOUT="10m"
+              if ! kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=${ROLL_TIMEOUT}; then
+                echo "Rollout failed or timed out after ${ROLL_TIMEOUT}. Collecting diagnostics..."
+                kubectl -n "${NAMESPACE}" describe deployment tasky-app || true
+                kubectl -n "${NAMESPACE}" get pods -l app=tasky -o wide || true
+                kubectl -n "${NAMESPACE}" get events --sort-by='.metadata.creationTimestamp' || true
+                for pod in $(kubectl -n "${NAMESPACE}" get pods -l app=tasky -o jsonpath='{.items[*].metadata.name}'); do
+                  echo "--- Logs for pod: ${pod} ---"
+                  kubectl -n "${NAMESPACE}" logs ${pod} --tail=200 || true
+                done
+                exit 1
+              fi
               echo "Rollout successful"
             else
               echo "Deployment 'tasky-app' not found after apply; attempting to create by patching manifest"
@@ -135,7 +146,18 @@ jobs:
                 kubectl apply -f k8s/deployment-patched.yaml -n "${NAMESPACE}"
                 rm -f k8s/deployment-patched.yaml.bak || true
                 kubectl -n "${NAMESPACE}" set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest --record
-                kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=5m
+                ROLL_TIMEOUT="10m"
+                if ! kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=${ROLL_TIMEOUT}; then
+                  echo "Patched deployment rollout failed or timed out after ${ROLL_TIMEOUT}. Collecting diagnostics..."
+                  kubectl -n "${NAMESPACE}" describe deployment tasky-app || true
+                  kubectl -n "${NAMESPACE}" get pods -l app=tasky -o wide || true
+                  kubectl -n "${NAMESPACE}" get events --sort-by='.metadata.creationTimestamp' || true
+                  for pod in $(kubectl -n "${NAMESPACE}" get pods -l app=tasky -o jsonpath='{.items[*].metadata.name}'); do
+                    echo "--- Logs for pod: ${pod} ---"
+                    kubectl -n "${NAMESPACE}" logs ${pod} --tail=200 || true
+                  done
+                  exit 1
+                fi
                 echo "Patched deployment applied and rollout completed"
               else
                 echo "No <REGISTRY> placeholder found in k8s/deployment.yaml; ensure the deployment manifest includes the correct image or set IMAGE before running deploy.sh"
