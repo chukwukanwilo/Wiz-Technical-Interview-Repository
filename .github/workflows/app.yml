@@ -114,9 +114,33 @@ jobs:
 
       - name: Trigger K8s rollout
         run: |
+          set -e
+          NAMESPACE="${K8S_NAMESPACE:-default}"
           if [ -f "$HOME/.kube/config" ]; then
-            echo "Kubeconfig found, updating deployment image"
-            kubectl set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest || true
+            echo "Kubeconfig found; applying manifests from k8s/ (namespace: ${NAMESPACE})"
+            kubectl apply -f k8s/ -n "${NAMESPACE}" || true
+
+            echo "Checking for deployment 'tasky-app' in namespace '${NAMESPACE}'"
+            if kubectl -n "${NAMESPACE}" get deployment tasky-app >/dev/null 2>&1; then
+              echo "Deployment found; setting image and waiting for rollout"
+              kubectl -n "${NAMESPACE}" set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest --record
+              kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=5m
+              echo "Rollout successful"
+            else
+              echo "Deployment 'tasky-app' not found after apply; attempting to create by patching manifest"
+              if grep -q '<REGISTRY>' k8s/deployment.yaml >/dev/null 2>&1; then
+                echo "Patching k8s/deployment.yaml with ECR_REGISTRY"
+                cp k8s/deployment.yaml k8s/deployment-patched.yaml
+                sed -i.bak "s~<REGISTRY>~${ECR_REGISTRY}~g" k8s/deployment-patched.yaml || true
+                kubectl apply -f k8s/deployment-patched.yaml -n "${NAMESPACE}"
+                rm -f k8s/deployment-patched.yaml.bak || true
+                kubectl -n "${NAMESPACE}" set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest --record
+                kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=5m
+                echo "Patched deployment applied and rollout completed"
+              else
+                echo "No <REGISTRY> placeholder found in k8s/deployment.yaml; ensure the deployment manifest includes the correct image or set IMAGE before running deploy.sh"
+              fi
+            fi
           else
-            echo "Kubeconfig not found; skipping kubectl set image to avoid connection errors"
+            echo "Kubeconfig not found; skipping kubectl operations"
           fi
