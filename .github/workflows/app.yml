@@ -96,7 +96,12 @@ jobs:
           else
             echo "Cluster ${EKS_CLUSTER_NAME} not found; creating with eksctl (this can take ~10-20 minutes)"
             # Adjust node count and node-type as needed. Managed nodes by default.
-            eksctl create cluster --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --nodes 2 --managed --wait
+            # Some eksctl releases in CI may not support the `--wait` flag. Create
+            # the cluster without `--wait` and then use the AWS CLI to wait for
+            # the cluster to become ACTIVE before continuing.
+            eksctl create cluster --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --nodes 2 --managed
+            echo "Waiting for EKS cluster to become ACTIVE (this can take ~10-20 minutes)..."
+            aws eks wait cluster-active --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
           fi
 
       - name: Configure kubectl for EKS
