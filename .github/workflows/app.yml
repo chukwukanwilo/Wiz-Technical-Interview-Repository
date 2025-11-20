@@ -126,9 +126,14 @@ jobs:
             # Ensure a simple in-cluster Mongo exists for the app to connect to.
             if ! kubectl -n "${NAMESPACE}" get deployment mongo >/dev/null 2>&1; then
               echo "Mongo deployment not found; creating temporary in-cluster MongoDB"
-              # create mongo using kubectl run/expose below
-              kubectl -n "${NAMESPACE}" run mongo --image=mongo:4.4 --restart=Always --env=MONGO_INITDB_DATABASE=tasky --port=27017 --labels=app=mongo || true
-              kubectl -n "${NAMESPACE}" expose deployment mongo --port=27017 --target-port=27017 --name=mongo || true
+              # Create a proper Deployment for mongo (kubectl run behaviour varies by kubectl version)
+              if ! kubectl -n "${NAMESPACE}" get deployment mongo >/dev/null 2>&1; then
+                kubectl -n "${NAMESPACE}" create deployment mongo --image=mongo:4.4 || true
+                kubectl -n "${NAMESPACE}" set env deployment/mongo MONGO_INITDB_DATABASE=tasky || true
+                kubectl -n "${NAMESPACE}" expose deployment mongo --port=27017 --target-port=27017 --name=mongo || true
+              else
+                echo "Mongo deployment already present; skipping creation"
+              fi
             else
               echo "Mongo deployment already present; skipping creation"
             fi
