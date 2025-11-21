@@ -167,6 +167,14 @@ jobs:
                 exit 1
               fi
               echo "Rollout successful"
+
+      - name: Backup app to S3
+        run: |
+          BACKUP_FILE="/tmp/app-backup-$(date +%F-%H%M%S).tar.gz"
+          tar -czf "$BACKUP_FILE" ./app
+          # Use the bucket name from Terraform output if available, else fallback
+          BUCKET_NAME="wiz-tasky-backup-$(aws s3api list-buckets --query 'Buckets[?contains(Name, `wiz-tasky-backup`)].Name' --output text | head -n1)"
+          aws s3 cp "$BACKUP_FILE" s3://$BUCKET_NAME/backup-$(date +%F-%H%M%S).tar.gz
             else
               echo "Deployment 'tasky-app' not found after apply; attempting to create by patching manifest"
               if grep -q '<REGISTRY>' k8s/deployment.yaml >/dev/null 2>&1; then
