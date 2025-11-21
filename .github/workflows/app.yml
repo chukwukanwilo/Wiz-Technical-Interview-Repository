@@ -193,39 +193,72 @@ jobs:
             echo "Kubeconfig not found; skipping kubectl operations"
           fi
 
+      - name: Install Terraform (for reading outputs)
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.7
+
       - name: Backup app to S3
         run: |
+          set -euo pipefail
           BACKUP_FILE="/tmp/app-backup-$(date +%F-%H%M%S).tar.gz"
           tar -czf "$BACKUP_FILE" ./app
-          # Use the bucket name from Terraform output if available, else fallback
-          BUCKET_NAME="wiz-tasky-backup-$(aws s3api list-buckets --query 'Buckets[?contains(Name, `wiz-tasky-backup`)].Name' --output text | head -n1)"
-          aws s3 cp "$BACKUP_FILE" s3://$BUCKET_NAME/backup-$(date +%F-%H%M%S).tar.gz
+
+            # Prefer explicit env var if provided
+            if [ -n "${APP_BACKUP_BUCKET:-}" ]; then
+              BUCKET_NAME="${APP_BACKUP_BUCKET}"
             else
-              echo "Deployment 'tasky-app' not found after apply; attempting to create by patching manifest"
-              if grep -q '<REGISTRY>' k8s/deployment.yaml >/dev/null 2>&1; then
-                echo "Patching k8s/deployment.yaml with ECR_REGISTRY"
-                cp k8s/deployment.yaml k8s/deployment-patched.yaml
-                sed -i.bak "s~<REGISTRY>~${ECR_REGISTRY}~g" k8s/deployment-patched.yaml || true
-                kubectl apply -f k8s/deployment-patched.yaml -n "${NAMESPACE}"
-                rm -f k8s/deployment-patched.yaml.bak || true
-                kubectl -n "${NAMESPACE}" set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest --record
-                ROLL_TIMEOUT="10m"
-                if ! kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=${ROLL_TIMEOUT}; then
-                  echo "Patched deployment rollout failed or timed out after ${ROLL_TIMEOUT}. Collecting diagnostics..."
-                  kubectl -n "${NAMESPACE}" describe deployment tasky-app || true
-                  kubectl -n "${NAMESPACE}" get pods -l app=tasky -o wide || true
-                  kubectl -n "${NAMESPACE}" get events --sort-by='.metadata.creationTimestamp' || true
-                  for pod in $(kubectl -n "${NAMESPACE}" get pods -l app=tasky -o jsonpath='{.items[*].metadata.name}'); do
-                    echo "--- Logs for pod: ${pod} ---"
-                    kubectl -n "${NAMESPACE}" logs ${pod} --tail=200 || true
-                  done
-                  exit 1
+              # Try to read bucket name from Terraform outputs (if available)
+              BUCKET_NAME=""
+              if command -v terraform >/dev/null 2>&1; then
+                TF_BUCKET=$(terraform -chdir=terraform output -raw app_backup_bucket_name 2>/dev/null || true)
+                if [ -n "$TF_BUCKET" ]; then
+                  BUCKET_NAME="$TF_BUCKET"
                 fi
-                echo "Patched deployment applied and rollout completed"
-              else
-                echo "No <REGISTRY> placeholder found in k8s/deployment.yaml; ensure the deployment manifest includes the correct image or set IMAGE before running deploy.sh"
+              fi
+
+              # If still empty, try to find an existing bucket by prefix
+              if [ -z "${BUCKET_NAME}" ]; then
+                FOUND_BUCKET=$(aws s3api list-buckets --query 'Buckets[?contains(Name, `wiz-tasky-backup`)].Name' --output text | head -n1 || true)
+                if [ -n "$FOUND_BUCKET" ]; then
+                  BUCKET_NAME="$FOUND_BUCKET"
+                else
+                  # Fallback: use a deterministic default
+                  BUCKET_NAME="wiz-tasky-backup-${AWS_REGION}"
+                fi
               fi
             fi
+
+          echo "Using S3 bucket: ${BUCKET_NAME}"
+
+          # Ensure bucket exists; create if missing
+          if ! aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
+            echo "Bucket ${BUCKET_NAME} not found; creating..."
+            if [ "${AWS_REGION:-us-east-1}" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$BUCKET_NAME"
+            else
+              aws s3api create-bucket --bucket "$BUCKET_NAME" --create-bucket-configuration LocationConstraint=${AWS_REGION}
+            fi
+
+            # Wait until bucket is available
+            for i in 1 2 3 4 5; do
+              if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
+                echo "Bucket ${BUCKET_NAME} is now available"
+                break
+              fi
+              echo "Waiting for bucket to become available... (attempt $i)"
+              sleep 3
+            done
           else
-            echo "Kubeconfig not found; skipping kubectl operations"
+            echo "Bucket ${BUCKET_NAME} already exists"
+          fi
+
+          DEST="s3://${BUCKET_NAME}/backup-$(date +%F-%H%M%S).tar.gz"
+          echo "Uploading $BACKUP_FILE to ${DEST}"
+          if aws s3 cp "$BACKUP_FILE" "$DEST"; then
+            echo "Upload successful"
+          else
+            echo "Upload failed to ${DEST}" >&2
+            aws s3 ls "s3://${BUCKET_NAME}" || true
+            exit 1
           fi
