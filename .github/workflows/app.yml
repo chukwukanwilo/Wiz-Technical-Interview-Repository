@@ -44,8 +44,6 @@ jobs:
 
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
-        with:
-          region: us-east-1
 
       - name: Ensure ECR repository
         run: |
