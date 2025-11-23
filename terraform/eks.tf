@@ -8,6 +8,10 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
+  # Enable public endpoint access for kubectl/CI
+  cluster_endpoint_public_access  = true
+  cluster_endpoint_private_access = true
+
   # Enable control plane logging (required for CloudTrail/security demo)
   cluster_enabled_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
 
