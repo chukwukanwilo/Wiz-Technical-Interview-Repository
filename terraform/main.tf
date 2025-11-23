@@ -8,4 +8,5 @@
 # - security.tf: CloudTrail, AWS Config, security controls
 # - variables.tf: Input variables
 # - outputs.tf: Output values
+# Ready for fresh deployment
 
