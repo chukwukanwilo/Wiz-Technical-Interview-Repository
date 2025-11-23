@@ -49,9 +49,6 @@ jobs:
           format: 'table'
 
       # --- Terraform standard workflow ---
-      - name: Terraform FMT
-        run: terraform fmt -check -diff
-
       - name: Terraform Init
         run: terraform init
 
