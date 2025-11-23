@@ -39,13 +39,13 @@ jobs:
           terraform_version: 1.5.7
 
       # --- IaC Security Scan (Wiz requirement: scan IaC before deploy) ---
-      - name: Install Trivy
-        uses: aquasecurity/trivy-action@v0.28.0
+      - name: Run Trivy IaC Scanner
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
-          scan-ref: './terraform'
+          scan-ref: 'terraform'
           exit-code: '0'
-          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
           format: 'table'
 
       # --- Terraform standard workflow ---
