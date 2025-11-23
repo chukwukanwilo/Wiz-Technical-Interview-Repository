@@ -91,10 +91,6 @@ jobs:
             echo "Cluster ${EKS_CLUSTER_NAME} already exists; skipping creation"
           else
             echo "Cluster ${EKS_CLUSTER_NAME} not found; creating with eksctl (this can take ~10-20 minutes)"
-            # Adjust node count and node-type as needed. Managed nodes by default.
-            # Some eksctl releases in CI may not support the `--wait` flag. Create
-            # the cluster without `--wait` and then use the AWS CLI to wait for
-            # the cluster to become ACTIVE before continuing.
             eksctl create cluster --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --nodes 2 --managed
             echo "Waiting for EKS cluster to become ACTIVE (this can take ~10-20 minutes)..."
             aws eks wait cluster-active --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
@@ -116,7 +112,6 @@ jobs:
           NAMESPACE="${K8S_NAMESPACE:-default}"
           if [ -f "$HOME/.kube/config" ]; then
             echo "Kubeconfig found; applying non-deployment manifests from k8s/ (namespace: ${NAMESPACE})"
-            # Apply RBAC, Service and Ingress first (avoid applying deployment with placeholders)
             kubectl apply -f k8s/clusterrolebinding.yaml -n "${NAMESPACE}" || true
             kubectl apply -f k8s/service.yaml -n "${NAMESPACE}" || true
             kubectl apply -f k8s/ingress.yaml -n "${NAMESPACE}" || true
@@ -124,7 +119,6 @@ jobs:
             # Ensure a simple in-cluster Mongo exists for the app to connect to.
             if ! kubectl -n "${NAMESPACE}" get deployment mongo >/dev/null 2>&1; then
               echo "Mongo deployment not found; creating temporary in-cluster MongoDB"
-              # Create a proper Deployment for mongo (kubectl run behaviour varies by kubectl version)
               kubectl -n "${NAMESPACE}" create deployment mongo --image=mongo:4.4 || true
               kubectl -n "${NAMESPACE}" set env deployment/mongo MONGO_INITDB_DATABASE=tasky || true
               kubectl -n "${NAMESPACE}" expose deployment mongo --port=27017 --target-port=27017 --name=mongo || true
@@ -137,7 +131,6 @@ jobs:
               echo "Patching k8s/deployment.yaml: replacing <REGISTRY> and <EC2_PRIVATE_IP>"
               cp k8s/deployment.yaml k8s/deployment-patched.yaml
               sed -i.bak "s~<REGISTRY>~${ECR_REGISTRY}~g" k8s/deployment-patched.yaml || true
-              # Point the app at the in-cluster mongo service
               sed -i.bak "s~<EC2_PRIVATE_IP>~mongo~g" k8s/deployment-patched.yaml || true
               DEPLOY_YAML="k8s/deployment-patched.yaml"
             else
@@ -193,42 +186,16 @@ jobs:
             echo "Kubeconfig not found; skipping kubectl operations"
           fi
 
-      - name: Install Terraform (for reading outputs)
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.7
-
       - name: Backup app to S3
+        env:
+          APP_BACKUP_BUCKET: ${{ secrets.APP_BACKUP_BUCKET }}
         run: |
           set -euo pipefail
           BACKUP_FILE="/tmp/app-backup-$(date +%F-%H%M%S).tar.gz"
           tar -czf "$BACKUP_FILE" ./app
 
-            # Prefer explicit env var if provided
-            if [ -n "${APP_BACKUP_BUCKET:-}" ]; then
-              BUCKET_NAME="${APP_BACKUP_BUCKET}"
-            else
-              # Try to read bucket name from Terraform outputs (if available)
-              BUCKET_NAME=""
-              if command -v terraform >/dev/null 2>&1; then
-                TF_BUCKET=$(terraform -chdir=terraform output -raw app_backup_bucket_name 2>/dev/null || true)
-                if [ -n "$TF_BUCKET" ]; then
-                  BUCKET_NAME="$TF_BUCKET"
-                fi
-              fi
-
-              # If still empty, try to find an existing bucket by prefix
-              if [ -z "${BUCKET_NAME}" ]; then
-                FOUND_BUCKET=$(aws s3api list-buckets --query 'Buckets[?contains(Name, `wiz-tasky-backup`)].Name' --output text | head -n1 || true)
-                if [ -n "$FOUND_BUCKET" ]; then
-                  BUCKET_NAME="$FOUND_BUCKET"
-                else
-                  # Fallback: use a deterministic default
-                  BUCKET_NAME="wiz-tasky-backup-${AWS_REGION}"
-                fi
-              fi
-            fi
-
+          # Use bucket from secret if provided, otherwise default
+          BUCKET_NAME="${APP_BACKUP_BUCKET:-wiz-tasky-backup-${AWS_REGION}}"
           echo "Using S3 bucket: ${BUCKET_NAME}"
 
           # Ensure bucket exists; create if missing
@@ -239,26 +206,10 @@ jobs:
             else
               aws s3api create-bucket --bucket "$BUCKET_NAME" --create-bucket-configuration LocationConstraint=${AWS_REGION}
             fi
-
-            # Wait until bucket is available
-            for i in 1 2 3 4 5; do
-              if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
-                echo "Bucket ${BUCKET_NAME} is now available"
-                break
-              fi
-              echo "Waiting for bucket to become available... (attempt $i)"
-              sleep 3
-            done
           else
             echo "Bucket ${BUCKET_NAME} already exists"
           fi
 
           DEST="s3://${BUCKET_NAME}/backup-$(date +%F-%H%M%S).tar.gz"
           echo "Uploading $BACKUP_FILE to ${DEST}"
-          if aws s3 cp "$BACKUP_FILE" "$DEST"; then
-            echo "Upload successful"
-          else
-            echo "Upload failed to ${DEST}" >&2
-            aws s3 ls "s3://${BUCKET_NAME}" || true
-            exit 1
-          fi
+          aws s3 cp "$BACKUP_FILE" "$DEST"
