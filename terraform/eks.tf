@@ -14,7 +14,7 @@ module "eks" {
   # EKS Managed Node Group in private subnets
   eks_managed_node_groups = {
     default = {
-      name           = "${var.project}-node-group"
+      name           = "${var.project}-ng"
       desired_size   = var.eks_node_group_desired
       max_size       = 3
       min_size       = 1
