@@ -3,7 +3,7 @@
 replicaCount: 2
 
 image:
-  repository: ""  # Set via --set (e.g., 123456.dkr.ecr.us-east-1.amazonaws.com/wiz-tasky)
+  repository: "" # Set via --set (e.g., 123456.dkr.ecr.us-east-1.amazonaws.com/wiz-tasky)
   pullPolicy: Always
   tag: "latest"
 
