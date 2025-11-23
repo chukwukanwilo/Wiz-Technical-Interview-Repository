@@ -2,214 +2,90 @@ name: App CI/CD
 
 on:
   push:
-  workflow_dispatch: {}
+    paths:
+      - 'app/**'
+      - 'k8s/**'
+      - 'helm/**'
+  workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
 
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: wiz-tasky
+  EKS_CLUSTER_NAME: wiz-exercise-eks
+
 jobs:
-  build-and-deploy:
+  security-scan:
+    name: Security Scanning
     runs-on: ubuntu-latest
-    env:
-      AWS_REGION: us-east-1
-      EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-      CREATE_EKS: ${{ secrets.CREATE_EKS }}
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Run npm audit
+        working-directory: ./app
+        run: npm audit --audit-level=moderate || true
+      
+      - name: Build image for scanning
+        run: docker build -t scan-image:latest ./app
+      
+      - name: Run Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'scan-image:latest'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
 
-      - name: Configure AWS credentials (OIDC)
+  build-and-deploy:
+    name: Build and Deploy
+    needs: security-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v3
         with:
           role-to-assume: arn:aws:iam::253490792199:role/github-oidc-deploy-role
-          aws-region: us-east-1
-
-      - name: Install tooling (eksctl, kubectl)
-        run: |
-          set -e
-          echo "Installing eksctl"
-          curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
-          sudo mv /tmp/eksctl /usr/local/bin
-          eksctl version || true
-
-          echo "Installing kubectl"
-          KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-          curl -L "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o kubectl
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/
-          kubectl version --client --short || true
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
+          aws-region: ${{ env.AWS_REGION }}
+      
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Ensure ECR repository
+      
+      - name: Get ECR registry
+        id: ecr
         run: |
-          set -e
-          if [ -z "${{ secrets.ECR_REPO }}" ]; then
-            REPO_NAME="wiz-tasky"
-            echo "ECR_REPO will default to 'wiz-tasky'"
-          else
-            REPO_NAME="${{ secrets.ECR_REPO }}"
-          fi
-          echo "ECR_REPO=${REPO_NAME}" >> $GITHUB_ENV
-
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          echo "ECR_REGISTRY=${REGISTRY}" >> $GITHUB_ENV
-
-          aws ecr describe-repositories --repository-names "${REPO_NAME}" || aws ecr create-repository --repository-name "${REPO_NAME}"
-
-      - name: Build image
-        run: |
-          docker build -t ${ECR_REPO}:latest ./app
-          docker tag ${ECR_REPO}:latest ${ECR_REGISTRY}/${ECR_REPO}:latest
-
-      - name: Scan image
-        run: trivy image --severity HIGH,CRITICAL ${ECR_REGISTRY}/${ECR_REPO}:latest || true
-
-      - name: Push image
-        run: docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
-
-      - name: Create EKS cluster if requested
-        run: |
-          set -e
-          echo "CREATE_EKS set? -> ${CREATE_EKS:+yes}"
-          if [ -z "${EKS_CLUSTER_NAME:-}" ]; then
-            echo "EKS_CLUSTER_NAME not set; skipping cluster creation"
-            exit 0
-          fi
-          if [ "${CREATE_EKS:-}" != "true" ]; then
-            echo "CREATE_EKS != 'true'; skipping cluster creation"
-            exit 0
-          fi
-
-          echo "Checking for existing cluster named '${EKS_CLUSTER_NAME}' in ${AWS_REGION}"
-          if aws eks list-clusters --region "${AWS_REGION}" --query "clusters" --output text | tr '\t' '\n' | grep -x "${EKS_CLUSTER_NAME}" >/dev/null 2>&1; then
-            echo "Cluster ${EKS_CLUSTER_NAME} already exists; skipping creation"
-          else
-            echo "Cluster ${EKS_CLUSTER_NAME} not found; creating with eksctl (this can take ~10-20 minutes)"
-            eksctl create cluster --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}" --nodes 2 --managed
-            echo "Waiting for EKS cluster to become ACTIVE (this can take ~10-20 minutes)..."
-            aws eks wait cluster-active --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
-          fi
-
-      - name: Configure kubectl for EKS
-        run: |
-          set -e
-          echo "EKS_CLUSTER_NAME set? -> ${EKS_CLUSTER_NAME:+yes}"
-          if [ -z "${EKS_CLUSTER_NAME:-}" ]; then
-            echo "EKS_CLUSTER_NAME secret not set; skipping aws eks update-kubeconfig"
-            exit 0
-          fi
-          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
-
-      - name: Trigger K8s rollout
-        run: |
-          set -e
-          NAMESPACE="${K8S_NAMESPACE:-default}"
-          if [ -f "$HOME/.kube/config" ]; then
-            echo "Kubeconfig found; applying non-deployment manifests from k8s/ (namespace: ${NAMESPACE})"
-            kubectl apply -f k8s/clusterrolebinding.yaml -n "${NAMESPACE}" || true
-            kubectl apply -f k8s/service.yaml -n "${NAMESPACE}" || true
-            kubectl apply -f k8s/ingress.yaml -n "${NAMESPACE}" || true
-
-            # Ensure a simple in-cluster Mongo exists for the app to connect to.
-            if ! kubectl -n "${NAMESPACE}" get deployment mongo >/dev/null 2>&1; then
-              echo "Mongo deployment not found; creating temporary in-cluster MongoDB"
-              kubectl -n "${NAMESPACE}" create deployment mongo --image=mongo:4.4 || true
-              kubectl -n "${NAMESPACE}" set env deployment/mongo MONGO_INITDB_DATABASE=tasky || true
-              kubectl -n "${NAMESPACE}" expose deployment mongo --port=27017 --target-port=27017 --name=mongo || true
-            else
-              echo "Mongo deployment already present; skipping creation"
-            fi
-
-            # Prepare deployment manifest: patch placeholders before applying
-            if grep -q '<REGISTRY>\|<EC2_PRIVATE_IP>' k8s/deployment.yaml >/dev/null 2>&1; then
-              echo "Patching k8s/deployment.yaml: replacing <REGISTRY> and <EC2_PRIVATE_IP>"
-              cp k8s/deployment.yaml k8s/deployment-patched.yaml
-              sed -i.bak "s~<REGISTRY>~${ECR_REGISTRY}~g" k8s/deployment-patched.yaml || true
-              sed -i.bak "s~<EC2_PRIVATE_IP>~mongo~g" k8s/deployment-patched.yaml || true
-              DEPLOY_YAML="k8s/deployment-patched.yaml"
-            else
-              DEPLOY_YAML="k8s/deployment.yaml"
-            fi
-            echo "Applying deployment manifest (${DEPLOY_YAML})"
-            kubectl apply -f "${DEPLOY_YAML}" -n "${NAMESPACE}"
-
-            echo "Checking for deployment 'tasky-app' in namespace '${NAMESPACE}'"
-            if kubectl -n "${NAMESPACE}" get deployment tasky-app >/dev/null 2>&1; then
-              echo "Deployment found; setting image and waiting for rollout"
-              kubectl -n "${NAMESPACE}" set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest --record
-              ROLL_TIMEOUT="10m"
-              if ! kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=${ROLL_TIMEOUT}; then
-                echo "Rollout failed or timed out after ${ROLL_TIMEOUT}. Collecting diagnostics..."
-                kubectl -n "${NAMESPACE}" describe deployment tasky-app || true
-                kubectl -n "${NAMESPACE}" get pods -l app=tasky -o wide || true
-                kubectl -n "${NAMESPACE}" get events --sort-by='.metadata.creationTimestamp' || true
-                for pod in $(kubectl -n "${NAMESPACE}" get pods -l app=tasky -o jsonpath='{.items[*].metadata.name}'); do
-                  echo "--- Logs for pod: ${pod} ---"
-                  kubectl -n "${NAMESPACE}" logs ${pod} --tail=200 || true
-                done
-                exit 1
-              fi
-              echo "Rollout successful"
-            else
-              echo "Deployment 'tasky-app' not found after apply; attempting to create by patching manifest"
-              if grep -q '<REGISTRY>' k8s/deployment.yaml >/dev/null 2>&1; then
-                echo "Patching k8s/deployment.yaml with ECR_REGISTRY"
-                cp k8s/deployment.yaml k8s/deployment-patched.yaml
-                sed -i.bak "s~<REGISTRY>~${ECR_REGISTRY}~g" k8s/deployment-patched.yaml || true
-                kubectl apply -f k8s/deployment-patched.yaml -n "${NAMESPACE}"
-                rm -f k8s/deployment-patched.yaml.bak || true
-                kubectl -n "${NAMESPACE}" set image deployment/tasky-app tasky=${ECR_REGISTRY}/${ECR_REPO}:latest --record
-                ROLL_TIMEOUT="10m"
-                if ! kubectl -n "${NAMESPACE}" rollout status deployment/tasky-app --timeout=${ROLL_TIMEOUT}; then
-                  echo "Patched deployment rollout failed or timed out after ${ROLL_TIMEOUT}. Collecting diagnostics..."
-                  kubectl -n "${NAMESPACE}" describe deployment tasky-app || true
-                  kubectl -n "${NAMESPACE}" get pods -l app=tasky -o wide || true
-                  kubectl -n "${NAMESPACE}" get events --sort-by='.metadata.creationTimestamp' || true
-                  for pod in $(kubectl -n "${NAMESPACE}" get pods -l app=tasky -o jsonpath='{.items[*].metadata.name}'); do
-                    echo "--- Logs for pod: ${pod} ---"
-                    kubectl -n "${NAMESPACE}" logs ${pod} --tail=200 || true
-                  done
-                  exit 1
-                fi
-                echo "Patched deployment applied and rollout completed"
-              else
-                echo "No <REGISTRY> placeholder found in k8s/deployment.yaml; ensure the deployment manifest includes the correct image or set IMAGE before running deploy.sh"
-              fi
-            fi
-          else
-            echo "Kubeconfig not found; skipping kubectl operations"
-          fi
-
-      - name: Backup app to S3
+          echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
+          aws ecr describe-repositories --repository-names "${ECR_REPO}" 2>/dev/null || \
+            aws ecr create-repository --repository-name "${ECR_REPO}"
+      
+      - name: Build and push image
         env:
-          APP_BACKUP_BUCKET: ${{ secrets.APP_BACKUP_BUCKET }}
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          set -euo pipefail
-          BACKUP_FILE="/tmp/app-backup-$(date +%F-%H%M%S).tar.gz"
-          tar -czf "$BACKUP_FILE" ./app
-
-          # Use bucket from secret if provided, otherwise default
-          BUCKET_NAME="${APP_BACKUP_BUCKET:-wiz-tasky-backup-${AWS_REGION}}"
-          echo "Using S3 bucket: ${BUCKET_NAME}"
-
-          # Ensure bucket exists; create if missing
-          if ! aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
-            echo "Bucket ${BUCKET_NAME} not found; creating..."
-            if [ "${AWS_REGION:-us-east-1}" = "us-east-1" ]; then
-              aws s3api create-bucket --bucket "$BUCKET_NAME"
-            else
-              aws s3api create-bucket --bucket "$BUCKET_NAME" --create-bucket-configuration LocationConstraint=${AWS_REGION}
-            fi
-          else
-            echo "Bucket ${BUCKET_NAME} already exists"
-          fi
-
-          DEST="s3://${BUCKET_NAME}/backup-$(date +%F-%H%M%S).tar.gz"
-          echo "Uploading $BACKUP_FILE to ${DEST}"
-          aws s3 cp "$BACKUP_FILE" "$DEST"
+          docker build -t ${ECR_REGISTRY}/${ECR_REPO}:latest ./app
+          docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
+      
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+      
+      - name: Configure kubectl
+        if: ${{ env.EKS_CLUSTER_NAME != '' }}
+        run: |
+          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+      
+      - name: Deploy to Kubernetes
+        if: ${{ env.EKS_CLUSTER_NAME != '' }}
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          export IMAGE="${ECR_REGISTRY}/${ECR_REPO}:latest"
+          ./scripts/deploy.sh
