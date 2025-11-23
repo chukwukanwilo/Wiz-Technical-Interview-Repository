@@ -1,31 +1,67 @@
 name: Terraform CI
+
 on:
   push:
     paths:
       - 'terraform/**'
+  pull_request:
+    paths:
+      - 'terraform/**'
+  workflow_dispatch: {}
 
 permissions:
-  id-token: write
+  id-token: write        # for GitHub OIDC → AWS
   contents: read
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    env:
+      AWS_REGION: us-east-1
+
     steps:
-    - uses: actions/checkout@v4
-    - name: Configure AWS credentials (OIDC)
-      uses: aws-actions/configure-aws-credentials@v3
-      with:
-        role-to-assume: arn:aws:iam::253490792199:role/github-oidc-deploy-role
-        aws-region: us-east-1
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v2
-    - name: Terraform Init
-      run: terraform -chdir=terraform init
-    - name: Terraform Validate
-      run: terraform -chdir=terraform validate
-    - name: Terraform Plan
-      run: terraform -chdir=terraform plan -out=tfplan
-    - name: Terraform Apply
-      if: github.ref == 'refs/heads/main'
-      run: terraform -chdir=terraform apply -auto-approve tfplan
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::253490792199:role/github-oidc-deploy-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.7
+
+      # --- IaC Security Scan (Wiz requirement: scan IaC before deploy) ---
+      - name: Install Trivy
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          scan-type: 'config'
+          scan-ref: './terraform'
+          exit-code: '0'
+          ignore-unfixed: true
+          format: 'table'
+
+      # --- Terraform standard workflow ---
+      - name: Terraform FMT
+        run: terraform fmt -check -diff
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      # Only apply on main branch (and not on PRs)
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve tfplan
