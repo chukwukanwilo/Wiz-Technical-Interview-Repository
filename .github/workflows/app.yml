@@ -77,6 +77,10 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
       
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      
       - name: Configure kubectl
         if: ${{ env.EKS_CLUSTER_NAME != '' }}
         run: |
