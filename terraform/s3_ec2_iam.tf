@@ -3,7 +3,7 @@
 # =============================================================================
 
 resource "aws_s3_bucket" "mongo_backups" {
-  bucket        = coalesce(var.backup_bucket_name, "${var.project}-mongo-backups-${random_id.bucket_suffix.hex}")
+  bucket        = var.backup_bucket_name != "" ? var.backup_bucket_name : "${var.project}-mongo-backups-${random_id.bucket_suffix.hex}"
   force_destroy = true
 
   tags = {
@@ -123,7 +123,7 @@ resource "aws_instance" "mongo_vm" {
   ami                    = data.aws_ami.amazon_linux_2.id
   instance_type          = "t3.micro"
   subnet_id              = module.vpc.public_subnets[0]
-  key_name               = var.key_name
+  # key_name removed - SSH port is open but no keypair (create manually if needed)
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
   vpc_security_group_ids = [aws_security_group.mongo_sg.id]
 
