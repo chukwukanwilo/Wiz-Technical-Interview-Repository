@@ -44,6 +44,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "mongo_backups" {
     id     = "cleanup-old-backups"
     status = "Enabled"
 
+    filter {}
+
     expiration {
       days = 30
     }

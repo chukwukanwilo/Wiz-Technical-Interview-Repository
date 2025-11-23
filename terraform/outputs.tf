@@ -10,9 +10,15 @@ output "s3_bucket" {
   value = aws_s3_bucket.mongo_backups.bucket
 }
 
-output "kubeconfig" {
-  value     = module.eks.kubeconfig
-  sensitive = true
+output "eks_cluster_endpoint" {
+  description = "EKS cluster endpoint"
+  value       = module.eks.cluster_endpoint
+}
+
+output "eks_cluster_certificate_authority_data" {
+  description = "EKS cluster certificate authority data"
+  value       = module.eks.cluster_certificate_authority_data
+  sensitive   = true
 }
 
 output "app_backup_bucket_name" {
