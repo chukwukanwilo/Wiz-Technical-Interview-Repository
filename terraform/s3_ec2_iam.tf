@@ -12,12 +12,7 @@ resource "aws_s3_bucket" "mongo_backups" {
   }
 }
 
-# Separate ACL resource (AWS provider v4+ requirement)
-resource "aws_s3_bucket_acl" "mongo_backups" {
-  bucket = aws_s3_bucket.mongo_backups.id
-  acl    = "public-read"
-}
-
+# Make bucket public via bucket policy instead of ACL (account has Block Public ACLs enabled)
 # Disable block public access (intentionally insecure for exercise)
 resource "aws_s3_bucket_public_access_block" "mongo_backups" {
   bucket = aws_s3_bucket.mongo_backups.id
@@ -26,6 +21,33 @@ resource "aws_s3_bucket_public_access_block" "mongo_backups" {
   block_public_policy     = false
   ignore_public_acls      = false
   restrict_public_buckets = false
+}
+
+# Public read policy (intentionally insecure)
+resource "aws_s3_bucket_policy" "mongo_backups_public" {
+  bucket = aws_s3_bucket.mongo_backups.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.mongo_backups.arn}/*"
+      },
+      {
+        Sid       = "PublicListBucket"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:ListBucket"
+        Resource  = aws_s3_bucket.mongo_backups.arn
+      }
+    ]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.mongo_backups]
 }
 
 # Versioning
