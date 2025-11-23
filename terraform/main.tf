@@ -10,3 +10,4 @@
 # - outputs.tf: Output values
 # Ready for fresh deployment
 
+# State synced
