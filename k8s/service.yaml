@@ -2,11 +2,11 @@ apiVersion: v1
 kind: Service
 metadata:
   name: tasky-svc
+  namespace: default
 spec:
+  type: LoadBalancer
   selector:
     app: tasky
   ports:
-  - protocol: TCP
-    port: 80
-    targetPort: 3000
-  type: ClusterIP
+    - port: 80          # exposed service port
+      targetPort: 3000  # internal container port (change if needed)
