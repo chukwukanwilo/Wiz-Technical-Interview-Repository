@@ -1,0 +1,51 @@
+# Default values for tasky-app
+
+replicaCount: 2
+
+image:
+  repository: ""  # Set via --set (e.g., 123456.dkr.ecr.us-east-1.amazonaws.com/wiz-tasky)
+  pullPolicy: Always
+  tag: "latest"
+
+# MongoDB connection via environment variable (requirement: "configured via environment variable")
+# The MONGO_URI will be injected from Kubernetes secret
+mongodb:
+  secretName: "mongodb-credentials"
+  secretKey: "MONGO_URI"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+  hosts:
+    - paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Intentional misconfiguration (requirement: "cluster-wide kubernetes admin role")
+rbac:
+  enabled: true
+  clusterRole: cluster-admin
+
+serviceAccount:
+  create: false
+  name: default
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
