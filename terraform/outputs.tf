@@ -19,3 +19,13 @@ output "app_backup_bucket_name" {
   description = "S3 bucket name used for app backups"
   value       = aws_s3_bucket.app_backup.bucket
 }
+
+output "mongodb_secret_name" {
+  description = "AWS Secrets Manager secret name for MongoDB credentials"
+  value       = data.aws_secretsmanager_secret.mongodb_credentials.name
+}
+
+output "eks_cluster_name" {
+  description = "EKS cluster name"
+  value       = module.eks.cluster_name
+}

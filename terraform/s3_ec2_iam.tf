@@ -1,18 +1,63 @@
-# Create S3 bucket (public-read) for backups
+# =============================================================================
+# S3 Buckets for MongoDB backups (intentionally public for exercise)
+# =============================================================================
+
 resource "aws_s3_bucket" "mongo_backups" {
-  bucket = coalesce(var.backup_bucket_name, "${var.project}-mongo-backups-${random_id.bucket_suffix.hex}")
-  acl    = "public-read"
+  bucket        = coalesce(var.backup_bucket_name, "${var.project}-mongo-backups-${random_id.bucket_suffix.hex}")
+  force_destroy = true
 
-  versioning {
-    enabled = true
+  tags = {
+    Name    = "${var.project}-mongo-backups"
+    Purpose = "MongoDB database backups (intentionally public)"
   }
+}
 
-  lifecycle_rule {
-    id      = "cleanup"
-    enabled = true
+# Separate ACL resource (AWS provider v4+ requirement)
+resource "aws_s3_bucket_acl" "mongo_backups" {
+  bucket = aws_s3_bucket.mongo_backups.id
+  acl    = "public-read"
+}
+
+# Disable block public access (intentionally insecure for exercise)
+resource "aws_s3_bucket_public_access_block" "mongo_backups" {
+  bucket = aws_s3_bucket.mongo_backups.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+# Versioning
+resource "aws_s3_bucket_versioning" "mongo_backups" {
+  bucket = aws_s3_bucket.mongo_backups.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Lifecycle rule
+resource "aws_s3_bucket_lifecycle_configuration" "mongo_backups" {
+  bucket = aws_s3_bucket.mongo_backups.id
+
+  rule {
+    id     = "cleanup-old-backups"
+    status = "Enabled"
+
     expiration {
       days = 30
     }
+  }
+}
+
+# S3 bucket for application backups (referenced in outputs)
+resource "aws_s3_bucket" "app_backup" {
+  bucket        = "${var.project}-app-backup-${random_id.bucket_suffix.hex}"
+  force_destroy = true
+
+  tags = {
+    Name    = "${var.project}-app-backup"
+    Purpose = "Application backup storage"
   }
 }
 
@@ -55,12 +100,12 @@ resource "aws_security_group" "mongo_sg" {
     cidr_blocks = ["0.0.0.0/0"] # intentionally open for the exercise
   }
 
-  # Allow MongoDB port from the VPC's private subnets CIDR - best effort using module outputs
+  # Allow MongoDB port from the VPC's private subnets CIDR
   ingress {
     from_port   = 27017
     to_port     = 27017
     protocol    = "tcp"
-    cidr_blocks = module.vpc.private_subnets # NOTE: some module outputs are lists of CIDR strings; ensure compatibility
+    cidr_blocks = module.vpc.private_subnets_cidr_blocks
   }
 
   egress {
@@ -80,8 +125,12 @@ resource "aws_instance" "mongo_vm" {
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
   vpc_security_group_ids = [aws_security_group.mongo_sg.id]
 
-  # Use templatefile to inject the bucket name into user-data
-  user_data = templatefile("${path.module}/user-data-mongo.tpl", { backup_bucket = aws_s3_bucket.mongo_backups.bucket })
+  # Use templatefile to inject variables into user-data
+  user_data = templatefile("${path.module}/user-data-mongo.tpl", {
+    backup_bucket = aws_s3_bucket.mongo_backups.bucket
+    secret_name   = data.aws_secretsmanager_secret.mongodb_credentials.name
+    aws_region    = var.aws_region
+  })
 
   tags = {
     Name = "${var.project}-mongo-vm"

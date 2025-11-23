@@ -19,5 +19,13 @@ spec:
         - containerPort: 3000
         env:
         - name: MONGO_URI
+          # Format: mongodb://username:password@host:27017/tasky?authSource=admin
+          # This value will be templated during deployment using Secret values
           value: "mongodb://<EC2_PRIVATE_IP>:27017/tasky"
-        volumeMounts: []
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

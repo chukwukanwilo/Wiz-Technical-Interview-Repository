@@ -13,4 +13,9 @@ module "vpc" {
 
   enable_nat_gateway = true
   single_nat_gateway = true
+
+  tags = {
+    Name    = "${var.project}-vpc"
+    Project = var.project
+  }
 }
