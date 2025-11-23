@@ -15,8 +15,8 @@ resource "aws_s3_bucket" "cloudtrail" {
   force_destroy = true
 
   tags = {
-    Name    = "${var.project}-cloudtrail"
-    Purpose = "CloudTrail audit logs"
+    Name    = "cloudtrail"
+    Purpose = "CloudTrail logs"
   }
 }
 
@@ -81,8 +81,8 @@ resource "aws_s3_bucket" "config" {
   force_destroy = true
 
   tags = {
-    Name    = "${var.project}-config"
-    Purpose = "AWS Config logs"
+    Name    = "config"
+    Purpose = "Config logs"
   }
 }
 
@@ -147,7 +147,7 @@ resource "aws_iam_role" "config" {
 
 resource "aws_iam_role_policy_attachment" "config" {
   role       = aws_iam_role.config.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/ConfigRole"
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
 }
 
 resource "aws_iam_role_policy" "config_s3" {
@@ -173,28 +173,9 @@ resource "aws_iam_role_policy" "config_s3" {
   })
 }
 
-resource "aws_config_configuration_recorder" "main" {
-  name     = "${var.project}-recorder"
-  role_arn = aws_iam_role.config.arn
-
-  recording_group {
-    all_supported                 = true
-    include_global_resource_types = true
-  }
-}
-
-resource "aws_config_delivery_channel" "main" {
-  name           = "${var.project}-delivery"
-  s3_bucket_name = aws_s3_bucket.config.bucket
-
-  depends_on = [aws_config_configuration_recorder.main]
-}
-
-resource "aws_config_configuration_recorder_status" "main" {
-  name       = aws_config_configuration_recorder.main.name
-  is_enabled = true
-
-  depends_on = [aws_config_delivery_channel.main]
+# Use existing Config recorder (limit: 1 per region)
+data "aws_config_configuration_recorder" "existing" {
+  name = "default"
 }
 
 # -----------------------------------------------------------------------------
@@ -210,7 +191,7 @@ resource "aws_config_config_rule" "s3_public_read" {
     source_identifier = "S3_BUCKET_PUBLIC_READ_PROHIBITED"
   }
 
-  depends_on = [aws_config_configuration_recorder.main]
+  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # Detect unrestricted SSH (will flag mongo_sg)
@@ -222,7 +203,7 @@ resource "aws_config_config_rule" "restricted_ssh" {
     source_identifier = "INCOMING_SSH_DISABLED"
   }
 
-  depends_on = [aws_config_configuration_recorder.main]
+  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # Detect IAM policies with admin access (will flag ec2_role)
@@ -234,7 +215,7 @@ resource "aws_config_config_rule" "iam_no_admin" {
     source_identifier = "IAM_POLICY_NO_STATEMENTS_WITH_ADMIN_ACCESS"
   }
 
-  depends_on = [aws_config_configuration_recorder.main]
+  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # S3 versioning check
@@ -246,7 +227,7 @@ resource "aws_config_config_rule" "s3_versioning" {
     source_identifier = "S3_BUCKET_VERSIONING_ENABLED"
   }
 
-  depends_on = [aws_config_configuration_recorder.main]
+  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # -----------------------------------------------------------------------------

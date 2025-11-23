@@ -7,8 +7,8 @@ resource "aws_s3_bucket" "mongo_backups" {
   force_destroy = true
 
   tags = {
-    Name    = "${var.project}-mongo-backups"
-    Purpose = "MongoDB database backups (intentionally public)"
+    Name    = "mongo-backups"
+    Purpose = "MongoDB backups"
   }
 }
 
@@ -58,8 +58,8 @@ resource "aws_s3_bucket" "app_backup" {
   force_destroy = true
 
   tags = {
-    Name    = "${var.project}-app-backup"
-    Purpose = "Application backup storage"
+    Name    = "app-backup"
+    Purpose = "Application backups"
   }
 }
 
