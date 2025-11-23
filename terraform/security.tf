@@ -75,108 +75,8 @@ resource "aws_cloudtrail" "main" {
 # -----------------------------------------------------------------------------
 # AWS Config - Detective Controls
 # -----------------------------------------------------------------------------
-
-resource "aws_s3_bucket" "config" {
-  bucket        = "${var.project}-config-${random_id.bucket_suffix.hex}"
-  force_destroy = true
-
-  tags = {
-    Name    = "config"
-    Purpose = "Config logs"
-  }
-}
-
-resource "aws_s3_bucket_policy" "config" {
-  bucket = aws_s3_bucket.config.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AWSConfigBucketPermissionsCheck"
-        Effect = "Allow"
-        Principal = {
-          Service = "config.amazonaws.com"
-        }
-        Action   = "s3:GetBucketAcl"
-        Resource = aws_s3_bucket.config.arn
-      },
-      {
-        Sid    = "AWSConfigBucketExistenceCheck"
-        Effect = "Allow"
-        Principal = {
-          Service = "config.amazonaws.com"
-        }
-        Action   = "s3:ListBucket"
-        Resource = aws_s3_bucket.config.arn
-      },
-      {
-        Sid    = "AWSConfigBucketPutObject"
-        Effect = "Allow"
-        Principal = {
-          Service = "config.amazonaws.com"
-        }
-        Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.config.arn}/*"
-        Condition = {
-          StringEquals = {
-            "s3:x-amz-acl" = "bucket-owner-full-control"
-          }
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role" "config" {
-  name = "${var.project}-config-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "config.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "config" {
-  role       = aws_iam_role.config.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
-}
-
-resource "aws_iam_role_policy" "config_s3" {
-  name = "${var.project}-config-s3"
-  role = aws_iam_role.config.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetBucketVersioning",
-          "s3:PutObject",
-          "s3:GetObject"
-        ]
-        Resource = [
-          aws_s3_bucket.config.arn,
-          "${aws_s3_bucket.config.arn}/*"
-        ]
-      }
-    ]
-  })
-}
-
-# Use existing Config recorder (limit: 1 per region)
-data "aws_config_configuration_recorder" "existing" {
-  name = "default"
-}
+# Note: Using existing Config recorder "default" in the account
+# Config Rules are added to the existing recorder to detect our intentional misconfigurations
 
 # -----------------------------------------------------------------------------
 # Config Rules - Detect Misconfigurations
@@ -190,8 +90,6 @@ resource "aws_config_config_rule" "s3_public_read" {
     owner             = "AWS"
     source_identifier = "S3_BUCKET_PUBLIC_READ_PROHIBITED"
   }
-
-  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # Detect unrestricted SSH (will flag mongo_sg)
@@ -202,8 +100,6 @@ resource "aws_config_config_rule" "restricted_ssh" {
     owner             = "AWS"
     source_identifier = "INCOMING_SSH_DISABLED"
   }
-
-  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # Detect IAM policies with admin access (will flag ec2_role)
@@ -214,8 +110,6 @@ resource "aws_config_config_rule" "iam_no_admin" {
     owner             = "AWS"
     source_identifier = "IAM_POLICY_NO_STATEMENTS_WITH_ADMIN_ACCESS"
   }
-
-  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # S3 versioning check
@@ -226,8 +120,6 @@ resource "aws_config_config_rule" "s3_versioning" {
     owner             = "AWS"
     source_identifier = "S3_BUCKET_VERSIONING_ENABLED"
   }
-
-  depends_on = [data.aws_config_configuration_recorder.existing]
 }
 
 # -----------------------------------------------------------------------------
