@@ -9,13 +9,13 @@ variable "project" {
 }
 
 variable "backup_bucket_name" {
-  type    = string
-  default = null
-  description = "Optional: provide a name for the backup bucket. If null, Terraform will generate one." 
+  type        = string
+  default     = null
+  description = "Optional: provide a name for the backup bucket. If null, Terraform will generate one."
 }
 
 variable "key_name" {
-  type = string
+  type        = string
   description = "EC2 keypair name for SSH access to Mongo VM"
 }
 

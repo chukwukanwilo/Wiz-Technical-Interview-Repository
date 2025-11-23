@@ -63,7 +63,7 @@ resource "aws_s3_bucket" "app_backup" {
 
 # IAM role for EC2 instance (intentionally permissive for exercise)
 resource "aws_iam_role" "ec2_role" {
-  name = "${var.project}-ec2-role"
+  name               = "${var.project}-ec2-role"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
 }
 
@@ -142,7 +142,7 @@ data "aws_ami" "amazon_linux_2" {
   most_recent = true
   owners      = ["amazon"]
   filter {
-    name = "name"
+    name   = "name"
     values = ["amzn2-ami-hvm-*-x86_64-gp2"]
   }
 }
