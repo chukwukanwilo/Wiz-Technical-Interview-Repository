@@ -12,3 +12,4 @@
 
 # State synced
 # Fresh deployment - clean slate
+# Lock cleared
