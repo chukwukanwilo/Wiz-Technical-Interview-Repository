@@ -32,6 +32,21 @@ module "eks" {
   # Use Access Entries API (aws-auth ConfigMap is deprecated)
   enable_cluster_creator_admin_permissions = true
   authentication_mode                      = "API"
+  
+  # Grant access to local IAM user
+  access_entries = {
+    local_admin = {
+      principal_arn = "arn:aws:iam::253490792199:user/odl_user_1962304"
+      policy_associations = {
+        admin = {
+          policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          access_scope = {
+            type = "cluster"
+          }
+        }
+      }
+    }
+  }
 
   tags = {
     Name        = "${var.project}-eks"
