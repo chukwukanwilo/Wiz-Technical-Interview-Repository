@@ -11,3 +11,4 @@
 # Ready for fresh deployment
 
 # State synced
+# Fresh deployment - clean slate
