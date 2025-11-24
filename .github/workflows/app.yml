@@ -92,4 +92,5 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           export IMAGE="${ECR_REGISTRY}/${ECR_REPO}:latest"
+          chmod +x scripts/deploy.sh
           ./scripts/deploy.sh
